@@ -30,3 +30,8 @@
 
 # Project Specific
 mandelbrot
+
+# Asciiverse build folders
+/out/
+/stage/
+/dist/
