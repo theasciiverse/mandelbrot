@@ -12,154 +12,176 @@
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
+//
+// Asciiverse changes (see PATCHES.md): the view is a centre point and a
+// zoom level, fitted to the terminal and centred, so the whole set shows at
+// start and after a resize; zoom stops at kMaxLevel, well before precision
+// runs out; more iterations as you zoom; colours come from the 256-colour
+// palette; Ctrl+C, SIGTERM and SIGHUP quit like q.
 
+#ifdef _WIN32
+#include <curses.h>
+#else
 #include <ncurses.h>
+#endif
+#include <signal.h>
 #include <stdio.h>
 #include <tgmath.h>
 
-int render(short color,long double zoom,long double shift_x,long double shift_y,int width,int height) {
-	long long x_scale = 25 * fabs(zoom);
-	long long y_scale = 10 * fabs(zoom);
-	
-	shift_x = shift_x + width * (zoom - 1);
-	
+// Each level zooms in by kZoomFactor. Upstream's x++ loops stopped
+// advancing once the coordinates outgrew the floating point type (about 120
+// levels where long double is plain double, as on Windows and Apple
+// silicon), which hung the program. Columns and rows are counted with
+// integers now, and zoom stops at level 100 (1.25^100, about 5e9), where a
+// cell is still about 1e-11 wide, four orders of magnitude above double
+// precision.
+static const int kMaxLevel = 100;
+static const long double kZoomFactor = 1.25;
+
+// cells per unit horizontally at level 0 are fitted to the terminal; rows
+// per unit are that divided by kAspect (upstream's 25 and 10)
+static const long double kAspect = 2.5;
+
+// black through red, orange and yellow to white, one colour per band
+static const short kRamp[16] = {16, 52, 88, 124, 160, 196, 202, 208,
+                                214, 220, 226, 227, 228, 229, 230, 231};
+
+static volatile sig_atomic_t quit_requested = 0;
+
+static void on_signal(int sig) {
+	(void)sig;
+	quit_requested = 1;
+}
+
+static int render(short color, int level, long double cx, long double cy, int width, int height) {
+	// fit the whole set (about 3 units wide, 2.5 high) into the terminal
+	long double base = width / 3.0L;
+	if (height < base) base = height;
+	if (base < 1) base = 1;
+	long double x_scale = base * pow(kZoomFactor, (long double)level);
+	long double y_scale = x_scale / kAspect;
+
+	// upstream stopped at 111 iterations, which leaves deep views blank;
+	// each level adds some, so detail keeps coming as you zoom
+	int max_k = 111 + 24 * level;
+
 	long double i,j,r;
 	int k,kk;
-	kk = 0;
-	
-	long double x,y;
-	y = -height + shift_y;
-	
+	kk = -1;
+
 	erase();
-	
-	int c = 0;
-	while(c++,y++ < (height - 1 + shift_y)) {
-		move(c,0);
-		
-		for(
-			x = 0 + shift_x;
-			x++ < 2 * width + shift_x;
-		) {
+
+	for (int row = 0; row < height; row++) {
+		move(row,0);
+		long double y = cy + (row - height / 2.0L) / y_scale;
+		for (int col = 0; col < width; col++) {
+			long double x = cx + (col - width / 2.0L) / x_scale;
 			for(
 				i=k=r=0;
-				j=r*r-i*i-2+x/x_scale,i=2*r*i+y/y_scale,j*j+i*i<11&&k++<111
+				j=r*r-i*i+x,i=2*r*i+y,j*j+i*i<11&&k++<max_k
 				;r=j
 			);
 			if (color && (k&15) != kk) {
-				attroff(COLOR_PAIR(k&15));
-				attron(COLOR_PAIR(k&15));
+				attron(COLOR_PAIR((k&15) + 1));
 				kk = k&15;
 			}
 			addch(" .:-;!/>)|&IH%*#"[k&15]);
 		}
 	}
-	
+
 	return 0;
 }
 
-int main() {
-	long double zoom = 1;
-	long double zoom_factor = 1.25;
-	
-	long double shift_x = -11;
-	long double shift_y = 0;
-	
-	// if you have a larger terminal...
-	// should get curses window size
-	int width = 50;
-	int height = 20;
-	
+int main(void) {
+	int level = 0;
+
+	// the centre of the view; the set spans about -2 to 0.47
+	long double cx = -0.765;
+	long double cy = 0;
+
+	int width = 80;
+	int height = 24;
+
 	int c = 0;
-	short color;
-	
+	short color = 0;
+
+	signal(SIGINT, on_signal);
+	signal(SIGTERM, on_signal);
+#ifdef SIGHUP
+	signal(SIGHUP, on_signal);
+#endif
+
 	initscr();
-	
+
 	noecho();
 	cbreak();
 	keypad(stdscr,TRUE);
-	
-	
-	color = COLORS >= 256;
-	
-	if (color) {
+	curs_set(0);
+	// wake up now and then so a signal is noticed
+	timeout(200);
+
+	// COLORS is only known after start_color(); upstream read it before,
+	// so colour never came on. The palette is no longer redefined, which
+	// many terminals (tmux, screen, the Linux console) refuse.
+	if (has_colors()) {
 		start_color();
-		
-		init_color(0,62*0,0,0);
-		init_color(1,62*1,0,0);
-		init_color(2,62*2,0,0);
-		init_color(3,62*3,0,0);
-		init_color(4,62*4,0,0);
-		init_color(5,62*5,0,0);
-		init_color(6,62*6,0,0);
-		init_color(7,62*7,0,0);
-		init_color(8,62*8,0,0);
-		init_color(9,62*9,0,0);
-		init_color(10,62*10,0,0);
-		init_color(11,62*11,0,0);
-		init_color(12,62*12,0,0);
-		init_color(13,62*13,0,0);
-		init_color(14,62*14,0,0);
-		init_color(15,62*15,0,0);
-		
-		init_pair(0,0,0);
-		init_pair(1,1,0);
-		init_pair(2,2,0);
-		init_pair(3,3,0);
-		init_pair(4,4,0);
-		init_pair(5,5,0);
-		init_pair(6,6,0);
-		init_pair(7,7,0);
-		init_pair(8,8,0);
-		init_pair(9,9,0);
-		init_pair(10,10,0);
-		init_pair(11,11,0);
-		init_pair(12,12,0);
-		init_pair(13,13,0);
-		init_pair(14,14,0);
-		init_pair(15,15,0);
+		color = COLORS >= 256;
 	}
-	
-	do {
+
+	if (color) {
+		for (short n = 0; n < 16; n++) {
+			init_pair(n + 1, kRamp[n], 16);
+		}
+		bkgd(COLOR_PAIR(1));
+	}
+
+	int redraw = 1;
+	while (!quit_requested) {
 		if (c == 'x' || c == 'X' || c == 'q' || c == 'Q') {
 			break;
 		}
-		else if (c == '+') {
-			zoom *= zoom_factor;
-			
-			shift_x *= zoom_factor;
-			shift_y *= zoom_factor;
+
+		getmaxyx(stdscr,height,width);
+		long double x_scale = (height < width / 3.0L ? height : width / 3.0L) * pow(kZoomFactor, (long double)level);
+		if (x_scale < 1) x_scale = 1;
+		long double y_scale = x_scale / kAspect;
+
+		if (c == '+' || c == '=') {
+			if (level < kMaxLevel) level++;
 		}
-		else if (c == '-') {
-			zoom /= zoom_factor;
-			
-			shift_x /= zoom_factor;
-			shift_y /= zoom_factor;
+		else if (c == '-' || c == '_') {
+			if (level > 0) level--;
 		}
+		// arrows move the view by 4 columns or 2 rows
 		else if (c == KEY_UP) {
-			shift_y--;
+			cy -= 2 / y_scale;
 		}
 		else if (c == KEY_DOWN) {
-			shift_y++;
+			cy += 2 / y_scale;
 		}
 		else if (c == KEY_LEFT) {
-			shift_x--;
+			cx -= 4 / x_scale;
 		}
 		else if (c == KEY_RIGHT) {
-			shift_x++;
+			cx += 4 / x_scale;
 		}
-		
-		getmaxyx(stdscr,height,width);
-		
-		if (zoom < 1) zoom = 1;
-		
-		render(color,zoom,shift_x,shift_y,width/2,height/2);
-		
-		refresh();
-		
+
+		// keep the centre near the set, so panning cannot run off for good
+		if (cx < -3) cx = -3;
+		if (cx > 2) cx = 2;
+		if (cy < -2) cy = -2;
+		if (cy > 2) cy = 2;
+
+		if (redraw || c != ERR) {
+			render(color,level,cx,cy,width,height);
+			refresh();
+			redraw = 0;
+		}
+
 		c = getch();
-	} while(c);
-	
+	}
+
 	endwin();
-	
+
 	return 0;
 }
