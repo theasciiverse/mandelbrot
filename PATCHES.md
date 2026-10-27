@@ -69,3 +69,9 @@ out past level 0, panned against the limits. ASan and UBSan: a scripted
 run of 150 zooms in, panning, 160 zooms out and fast panning was clean.
 Windows: cross-built with MinGW and PDCurses 3.9 in Docker, not run.
 macOS: not built here.
+
+## Ours
+
+- **How to play it, at the top of README.md.** A short note on installing and
+  starting it with av, or from a release archive; the original text follows
+  unchanged.
